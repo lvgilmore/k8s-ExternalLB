@@ -171,7 +171,7 @@ func (l *LBController)Create(w http.ResponseWriter, r *http.Request) {
 		err = nil
 	}
 
-	// TODO REMOVE FOR DEBUG ONLY
+	// TODO: REMOVE FOR DEBUG ONLY
 	ip , err = l.GetEmptyIp()
 
 	if err != nil {

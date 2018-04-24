@@ -100,7 +100,8 @@ func (c *Controller) syncLoadBalancer(event EventData) error {
 		// Update Service ip address
 		lbclient := c.clientset.CoreV1().Services(event.Data.ObjectMeta.Namespace)
 		retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-			// For Debug Only
+
+			// TODO: Remove this its For Debug Only
 			ipAddr = "10.0.0.0"
 
 			event.Data.Spec.ExternalIPs = []string{ipAddr}
