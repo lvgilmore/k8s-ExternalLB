@@ -36,6 +36,29 @@ func (a *Agent) Create(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "OK")
 }
 
+func (a *Agent) Update(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	var serviceInstance = loadbalancer.ServiceForAgentStruct{}
+	json.Unmarshal(body,&serviceInstance)
+	a.HaproxyConfig.UpdateFarms(serviceInstance)
+
+	a.HaproxyConfig.CreateConfigFile()
+	a.HaproxyConfig.ReloadHaproxyConfig()
+
+	io.WriteString(w, "OK")
+}
+
+func (a *Agent) Delete(w http.ResponseWriter, r *http.Request) {
+	
+}
+
+func (a *Agent) Nodes(w http.ResponseWriter, r *http.Request) {
+}
+
 func (a *Agent)StartProcess() {
 	a.HaproxyConfig.CreateConfigFile()
 	a.HaproxyConfig.RunHaproxy()
@@ -44,19 +67,10 @@ func (a *Agent)StartProcess() {
 	a.KeepalivedConfig.RunKeepAliveD()
 }
 
-func (a *Agent) Update(w http.ResponseWriter, r *http.Request) {
-}
-
-func (a *Agent) Delete(w http.ResponseWriter, r *http.Request) {
-}
-
-func (a *Agent) Nodes(w http.ResponseWriter, r *http.Request) {
-}
-
 func CreateAgentInstance(Interface,State string) (Agent) {
 	return Agent{KeepalivedConfig:KeepalivedConfig{Interface:Interface,
 												   State:State,
 												   VirtualInterface:make(map[string]VirtualInterface)},
-												   HaproxyConfig:HaproxyConfig{Farms:make(map[string]Farm)}}
+												   HaproxyConfig:HaproxyConfig{Services:make(map[string]Services)}}
 }
 

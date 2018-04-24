@@ -15,6 +15,7 @@ import (
 	"sync"
 	"k8s.io/api/core/v1"
 	"bytes"
+	"strconv"
 )
 
 type Node struct {
@@ -103,27 +104,51 @@ func (l *LBController)GetEmptyIp() (string, error) {
 	return "", errors.New("Fail to find any Key")
 }
 
-func (l *LBController)getVirtualRouterID() int {
-	for i :=1; i< 255; i++  {
-		_, err := l.kapi.Get(context.Background(), "/mylb/VirtualRouterID/"+ string(i), nil)
-		if err != nil {
-			err := err.(client.Error)
-			if err.Code == 100 {
-				return i
+func (l *LBController)getVirtualRouterID(nameSpace string) int {
+	value, err := l.kapi.Get(context.Background(), "/mylb/VirtualRouterID/Namespace/"+ nameSpace, nil)
+	if err == nil {
+		i , _ := strconv.Atoi(value.Node.Value)
+		return i
+	} else {
+		for i := 1; i < 255; i++ {
+			_, err := l.kapi.Get(context.Background(), "/mylb/VirtualRouterID/ID/"+strconv.Itoa(i), nil)
+			if err != nil {
+				err := err.(client.Error)
+				if err.Code == 100 {
+					l.kapi.Set(context.Background(),"/mylb/VirtualRouterID/Namespace/"+ nameSpace,strconv.Itoa(i),nil)
+					l.kapi.Set(context.Background(),"/mylb/VirtualRouterID/ID/"+strconv.Itoa(i),strconv.Itoa(i),nil)
+					return i
+				}
 			}
 		}
-	}
 
-	return -1
+		return -1
+	}
 }
 
 func (l *LBController)ClearDB() {
-	for _,ip := range l.HostsList {
-		_, err := l.kapi.Get(context.Background(), "/mylb/allocatedIps/"+ip, nil)
-		if err == nil {
-			l.kapi.Delete(context.Background(), "/mylb/allocatedIps/"+ip, nil)
-		}
+	//for _,ip := range l.HostsList {
+	//	_, err := l.kapi.Get(context.Background(), "/mylb/allocatedIps/"+ip, nil)
+	//	if err == nil {
+	//		l.kapi.Delete(context.Background(), "/mylb/allocatedIps/"+ip, nil)
+	//	}
+	//}
+
+	_ ,err := l.kapi.Delete(context.Background(), "/mylb/allocatedIps/",&client.DeleteOptions{Recursive:true,Dir:true})
+	if err != nil {
+		log.Println(err)
 	}
+
+	_,err = l.kapi.Delete(context.Background(), "/mylb/VirtualRouterID/",&client.DeleteOptions{Recursive:true,Dir:true})
+	if err != nil {
+		log.Println(err)
+	}
+	//for i := 1; i < 255; i++ {
+	//	_, err := l.kapi.Get(context.Background(), "/mylb/VirtualRouterID/ID/"+string(i), nil)
+	//	if err == nil {
+	//		l.kapi.Delete(context.Background(), "/mylb/VirtualRouterID/ID/"+string(i),nil)
+	//	}
+	//}
 }
 
 func (l *LBController)sendDataToAgents(serviceDataStruct ServiceDataStruct, commandType string) (error) {
@@ -172,7 +197,7 @@ func (l *LBController)Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// TODO: REMOVE FOR DEBUG ONLY
-	ip , err = l.GetEmptyIp()
+	//ip , err = l.GetEmptyIp()
 
 	if err != nil {
 		log.Print(err)
@@ -180,7 +205,7 @@ func (l *LBController)Create(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "")
 	} else {
 		l.kapi.Set(context.Background(), "/mylb/allocatedIps/"+ip, lbDataStruct.ServiceData.Namespace+"-"+lbDataStruct.ServiceData.Name, nil)
-		routerID := l.getVirtualRouterID()
+		routerID := l.getVirtualRouterID(lbDataStruct.ServiceData.Namespace)
 		l.mutex.Unlock()
 
 		lbDataStruct.ServiceData.Spec.ExternalIPs = []string{ip}
@@ -203,7 +228,16 @@ func (l *LBController)Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lbDataStruct := l.unMarshalDataStruct(body)
-	log.Print(lbDataStruct)
+	routerID := l.getVirtualRouterID(lbDataStruct.ServiceData.Namespace)
+	serviceDataStruct := ServiceDataStruct{ServiceData:lbDataStruct.ServiceData,Nodes:lbDataStruct.NodeList,IsCreated:false,RouterID:routerID}
+	err = l.sendDataToAgents(serviceDataStruct, "Update")
+	if err == nil {
+		serviceDataStruct.IsCreated = true
+	}
+
+	body,err = json.Marshal(&serviceDataStruct)
+	l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(serviceDataStruct), string(body), nil)
+	io.WriteString(w, lbDataStruct.ServiceData.Spec.ExternalIPs[0])
 
 }
 

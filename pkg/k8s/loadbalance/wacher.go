@@ -102,7 +102,7 @@ func (c *Controller) syncLoadBalancer(event EventData) error {
 		retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 
 			// TODO: Remove this its For Debug Only
-			ipAddr = "10.0.0.0"
+			//ipAddr = "10.0.0.0"
 
 			event.Data.Spec.ExternalIPs = []string{ipAddr}
 			_, updateErr := lbclient.Update(event.Data)

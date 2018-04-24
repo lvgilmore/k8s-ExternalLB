@@ -7,15 +7,19 @@ import (
 	"bytes"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 	"os/exec"
+	"strconv"
 )
 
 type HaproxyConfig struct {
-	Farms map[string]Farm
+	Services map[string]Services
 	Config string
 
+}
+
+type Services struct {
+	Farms map[int32]Farm
 }
 
 type Farm struct {
@@ -67,28 +71,43 @@ defaults
 )
 
 func (h *HaproxyConfig)AddNewFarms(serviceInstance loadbalancer.ServiceForAgentStruct) {
+	farmName := serviceInstance.Name
+	services, ok := h.Services[farmName]
+	if !ok {
+		h.Services[farmName] = Services{make(map[int32]Farm)}
+		services = h.Services[farmName]
+	}
+
 	for _,value := range serviceInstance.Ports {
 		realServers := make([]RealServer, len(serviceInstance.Nodes))
 		for index,serverValue := range serviceInstance.Nodes {
 			realServers[index] = RealServer{serverValue,value.NodePort}
 		}
-		farmName := serviceInstance.Name+"-"+strconv.Itoa(int(value.Port))
 
-		h.Farms[farmName] = Farm{Name:farmName,
-								 Protocol:strings.ToLower(serviceInstance.Protocol),
-								 BindAddr:serviceInstance.VirtualIp,
-								 BindPort:value.Port,
-								 Servers:realServers}
+		services.Farms[value.Port] = Farm{Name:farmName + "-" + strconv.Itoa(int(value.Port)),
+										  Protocol:strings.ToLower(serviceInstance.Protocol),
+										  BindAddr:serviceInstance.VirtualIp,
+										  BindPort:value.Port,
+										  Servers:realServers}
 	}
+}
+
+func (h *HaproxyConfig)UpdateFarms(serviceInstance loadbalancer.ServiceForAgentStruct) {
+	farmName := serviceInstance.Name
+	delete(h.Services, farmName)
+	h.AddNewFarms(serviceInstance)
+
 }
 
 func (h *HaproxyConfig)CreateConfigFile() {
 	h.Config = haproxyGlobalConfig
 	tmpl, _ := template.New("HaproxyFarmConfig").Parse(haproxyTemplate)
-	for _,value := range h.Farms {
-		farmConfig := new(bytes.Buffer)
-		tmpl.Execute(farmConfig, value)
-		h.Config += farmConfig.String()
+	for _,service := range h.Services {
+		for _, value := range service.Farms {
+			farmConfig := new(bytes.Buffer)
+			tmpl.Execute(farmConfig, value)
+			h.Config += farmConfig.String()
+		}
 	}
 
 	f, err := os.Create("/etc/haproxy/haproxy.cfg")
@@ -138,13 +157,4 @@ func (h *HaproxyConfig)RunHaproxy(){
 	} else {
 		h.ReloadHaproxyConfig()
 	}
-}
-
-func Temp() {
-	farm := Farm{Name:"test-Farm",Protocol:"TCP",BindAddr:"10.0.0.0",BindPort:1000,Servers:[]RealServer{{IpAddr:"10.0.0.1",Port:12345},
-		{IpAddr:"10.0.0.2",Port:12345}}}
-	tmpl, err := template.New("test").Parse(haproxyTemplate)
-	if err != nil { panic(err) }
-	err = tmpl.Execute(os.Stdout, farm)
-	if err != nil { panic(err) }
 }
