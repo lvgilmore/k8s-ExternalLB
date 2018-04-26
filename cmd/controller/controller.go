@@ -50,10 +50,26 @@ func NodeControllerStart(clientset *kubernetes.Clientset) *node.NodeController {
 			}
 		},
 		UpdateFunc: func(old interface{}, new interface{}) {
-			key, err := cache.MetaNamespaceKeyFunc(new)
-			if err == nil {
-				event := node.EventData{EventType:"Update",Name:key,Data:new.(*v1.Node)}
-				queue.Add(event)
+			needToUpdate := false
+			oldNode := old.(*v1.Node)
+			newNode := new.(*v1.Node)
+
+			if len(newNode.Status.Addresses) != len(oldNode.Status.Addresses){
+				needToUpdate = true
+			} else {
+				for index, _:= range newNode.Status.Addresses {
+					if newNode.Status.Addresses[index].Address != oldNode.Status.Addresses[index].Address {
+						needToUpdate = true
+					}
+				}
+			}
+
+			if needToUpdate {
+				key, err := cache.MetaNamespaceKeyFunc(new)
+				if err == nil {
+					event := node.EventData{EventType: "Update", Name: key, Data: new.(*v1.Node)}
+					queue.Add(event)
+				}
 			}
 		},
 		DeleteFunc: func(obj interface{}) {

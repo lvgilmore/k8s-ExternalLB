@@ -18,7 +18,11 @@ func main() {
 	//conn.Write([]byte("asdasdasd"))
 
 	lbController := loadbalancer.LBControllerInitializer(etcdEndPoints,agents,cidr)
-	lbController.ClearDB()
+
+	// TODO: For Debug
+	//lbController.ClearDB()
+
+	go lbController.SyncAgents()
 
 	http.HandleFunc("/Create", lbController.Create)
 	http.HandleFunc("/Update", lbController.Update)

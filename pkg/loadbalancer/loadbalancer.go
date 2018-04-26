@@ -47,6 +47,7 @@ type ServiceForAgentStruct struct {
 	Protocol string  `json:"protocol"`
 	Ports []Port     `json:"ports"`
 	RouterID int `json:"router_id"`
+	SyncTime int64 `json:"sync_time"`
 }
 
 type Port struct {
@@ -55,7 +56,7 @@ type Port struct {
 	NodePort int32 `json:"node_port"`
 }
 
-func convertToAgentStruct(serviceDataStruct ServiceDataStruct) ([]byte,error) {
+func getAgentStruct(serviceDataStruct ServiceDataStruct,syncTime int64) ServiceForAgentStruct {
 	ports := make([]Port, len(serviceDataStruct.ServiceData.Spec.Ports))
 
 	for index, value := range serviceDataStruct.ServiceData.Spec.Ports {
@@ -63,12 +64,18 @@ func convertToAgentStruct(serviceDataStruct ServiceDataStruct) ([]byte,error) {
 	}
 
 	serviceForAgentInstance := ServiceForAgentStruct{VirtualIp:serviceDataStruct.ServiceData.Spec.ExternalIPs[0],
-	                                                 Nodes:serviceDataStruct.Nodes,
-	                                                 Protocol:string(serviceDataStruct.ServiceData.Spec.Ports[0].Protocol),
+													 Nodes:serviceDataStruct.Nodes,
+													 Protocol:string(serviceDataStruct.ServiceData.Spec.Ports[0].Protocol),
 													 Ports:ports,
 													 RouterID:serviceDataStruct.RouterID,
 													 Name:getServiceName(serviceDataStruct),
-													 NameSpace:serviceDataStruct.ServiceData.Namespace}
+													 NameSpace:serviceDataStruct.ServiceData.Namespace,SyncTime:syncTime}
+
+	return serviceForAgentInstance
+}
+
+func convertToAgentStruct(serviceDataStruct ServiceDataStruct,syncTime int64) ([]byte,error) {
+	serviceForAgentInstance := getAgentStruct(serviceDataStruct,syncTime)
 
 	body,err := json.Marshal(&serviceForAgentInstance)
 	if err != nil {
@@ -152,8 +159,11 @@ func (l *LBController)ClearDB() {
 }
 
 func (l *LBController)sendDataToAgents(serviceDataStruct ServiceDataStruct, commandType string) (error) {
+	syncTime := time.Now().Unix()
+	l.kapi.Set(context.Background(), "/mylb/SyncTime",strconv.FormatInt(syncTime,10),nil)
+
 	IsAnyAgentAlive := false
-	jsonToAgents, err := convertToAgentStruct(serviceDataStruct)
+	jsonToAgents, err := convertToAgentStruct(serviceDataStruct,syncTime)
 
 	if err != nil {
 		return err
@@ -163,8 +173,10 @@ func (l *LBController)sendDataToAgents(serviceDataStruct ServiceDataStruct, comm
 		_, err = http.Post("http://" + agent.IpAddr+"/"+commandType, "application/json",bytes.NewBuffer(jsonToAgents))
 
 		if err != nil {
+			agent.IsOnline = false
 			log.Print(err)
 		} else {
+			agent.IsOnline = true
 			IsAnyAgentAlive = true
 		}
 
@@ -175,6 +187,32 @@ func (l *LBController)sendDataToAgents(serviceDataStruct ServiceDataStruct, comm
 	}
 
 	return nil
+}
+
+func (l *LBController)DeleteDataFromDB(serviceDataStruct ServiceDataStruct) {
+	// Remove Ip
+	_, err := l.kapi.Delete(context.Background(), "/mylb/allocatedIps/"+serviceDataStruct.ServiceData.Spec.ExternalIPs[0], nil)
+	if err != nil {
+		log.Println(err)
+	}
+
+	// remove Virtual Router
+	_, err = l.kapi.Delete(context.Background(), "/mylb/VirtualRouterID/Namespace/"+ serviceDataStruct.ServiceData.Namespace, nil)
+	if err != nil {
+		log.Println(err)
+	}
+
+	_, err = l.kapi.Delete(context.Background(), "/mylb/VirtualRouterID/ID/"+strconv.Itoa(serviceDataStruct.RouterID), nil)
+	if err != nil {
+		log.Println(err)
+	}
+
+	// Remove Service Data
+	_, err = l.kapi.Delete(context.Background(), "/mylb/services/"+getServiceName(serviceDataStruct), nil)
+	if err != nil {
+		log.Println(err)
+	}
+
 }
 
 func (l *LBController)Create(w http.ResponseWriter, r *http.Request) {
@@ -248,15 +286,113 @@ func (l *LBController)Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lbDataStruct:= l.unMarshalDataStruct(body)
-	log.Print(lbDataStruct)
+	value, err := l.kapi.Get(context.Background(), "/mylb/services/"+ lbDataStruct.ServiceData.Namespace+ "-" + lbDataStruct.ServiceData.Name, nil)
+	if err == nil {
+		var serviceDataStruct = ServiceDataStruct{}
+		json.Unmarshal([]byte(value.Node.Value),&serviceDataStruct)
+		err = l.sendDataToAgents(serviceDataStruct, "Delete")
+		l.DeleteDataFromDB(serviceDataStruct)
+		io.WriteString(w, lbDataStruct.ServiceData.Spec.ExternalIPs[0])
+	}
 
+	io.WriteString(w, "")
 }
 
 func (l *LBController)Nodes(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Panic(err)
+	}
 
+	lbDataStruct:= l.unMarshalDataStruct(body)
+	jsonToAgents, err := json.Marshal(lbDataStruct.NodeList)
+
+	if err != nil {
+		log.Println(err)
+	} else {
+		for _, agent := range l.agents {
+			_, err = http.Post("http://"+agent.IpAddr+"/Nodes", "application/json", bytes.NewBuffer(jsonToAgents))
+
+			if err != nil {
+				agent.IsOnline = false
+				log.Print(err)
+			} else {
+				agent.IsOnline = true
+			}
+
+		}
+
+		directory, err := l.kapi.Get(context.Background(), "/mylb/services/", nil)
+		if err != nil {
+			log.Println(err)
+			io.WriteString(w, "")
+		}
+
+		for _, node := range directory.Node.Nodes {
+			var serviceDataInstance = ServiceDataStruct{}
+			json.Unmarshal([]byte(node.Value), &serviceDataInstance)
+			serviceDataInstance.Nodes = lbDataStruct.NodeList
+			body, err = json.Marshal(&serviceDataInstance)
+			l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(serviceDataInstance), string(body), nil)
+		}
+
+		io.WriteString(w, "OK")
+	}
 }
 
+func (l *LBController)SyncAgents() {
+	c := time.Tick(10 * time.Second)
 
+	for {
+		<-c
+		NeedToSyncAgents := []Node{}
+
+		node, err := l.kapi.Get(context.Background(),"/mylb/SyncTime",nil)
+		if err == nil {
+
+			syncTime := []byte(node.Node.Value)
+			syncTimeInt, _ := strconv.ParseInt(node.Node.Value,10,64)
+			for _, value := range l.agents {
+				r, err := http.Post("http://"+value.IpAddr+"/SyncCheck", "application/json", bytes.NewBuffer(syncTime))
+
+				if err != nil {
+					value.IsOnline = false
+					log.Print(err)
+				} else {
+					value.IsOnline = true
+					resp, _ := ioutil.ReadAll(r.Body)
+					if b, _ := strconv.ParseBool(string(resp)); b == true {
+						NeedToSyncAgents = append(NeedToSyncAgents, value)
+					}
+				}
+			}
+
+			if len(NeedToSyncAgents) > 0 {
+				syncData := []ServiceForAgentStruct{}
+				services, err := l.kapi.Get(context.Background(), "/mylb/services/", nil)
+				if err != nil {
+					log.Println(err)
+				} else {
+					for _, value := range services.Node.Nodes {
+						var serviceData ServiceDataStruct
+						json.Unmarshal([]byte(value.Value), &serviceData)
+						syncData = append(syncData, getAgentStruct(serviceData, syncTimeInt))
+					}
+				}
+
+				syncDataByte, err := json.Marshal(&syncData)
+				if err != nil {
+					log.Println(err)
+				} else {
+					for _, value := range NeedToSyncAgents {
+						_, err = http.Post("http://"+value.IpAddr+"/Sync", "application/json", bytes.NewBuffer(syncDataByte))
+					}
+				}
+			}
+		}
+	}
+
+}
 
 func LBControllerInitializer(Endpoints []string,Nodes []string,cidr string) *LBController {
 

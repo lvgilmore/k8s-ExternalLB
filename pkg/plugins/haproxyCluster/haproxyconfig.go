@@ -14,8 +14,14 @@ import (
 
 type HaproxyConfig struct {
 	Services map[string]Services
+	StatsStruct StatsStruct
 	Config string
 
+}
+
+type StatsStruct struct {
+	Ip string
+	Port int
 }
 
 type Services struct {
@@ -59,6 +65,15 @@ defaults
         timeout client      50000
         timeout server      50000
 
+listen stats # Define a listen section called "stats"
+  bind {{.Ip}}:{{.Port}} 
+  mode http
+  stats enable  # Enable stats page
+  stats hide-version  # Hide HAProxy version
+  stats realm Haproxy\ Statistics  # Title text for popup window
+  stats uri /haproxy_stats  # Stats URI
+  stats auth haproxy:password  # Authentication credentials
+
 `
 
 	haproxyTemplate  = `listen {{.Name}}
@@ -99,9 +114,19 @@ func (h *HaproxyConfig)UpdateFarms(serviceInstance loadbalancer.ServiceForAgentS
 
 }
 
+func (h *HaproxyConfig)DeleteFarms(serviceInstance loadbalancer.ServiceForAgentStruct) {
+	farmName := serviceInstance.Name
+	delete(h.Services, farmName)
+}
+
 func (h *HaproxyConfig)CreateConfigFile() {
-	h.Config = haproxyGlobalConfig
-	tmpl, _ := template.New("HaproxyFarmConfig").Parse(haproxyTemplate)
+	tmpl, _ := template.New("HaproxyGlobalConfig").Parse(haproxyGlobalConfig)
+	GlobalConfig := new(bytes.Buffer)
+	tmpl.Execute(GlobalConfig, h.StatsStruct)
+	h.Config = GlobalConfig.String()
+
+
+	tmpl, _ = template.New("HaproxyFarmConfig").Parse(haproxyTemplate)
 	for _,service := range h.Services {
 		for _, value := range service.Farms {
 			farmConfig := new(bytes.Buffer)

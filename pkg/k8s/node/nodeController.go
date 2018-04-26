@@ -91,42 +91,26 @@ func (c *NodeController) processNextItem() bool {
 
 // syncLoadBalancer is the business logic of the controller.
 func (c *NodeController) syncNode(event EventData) error {
-	key := event.Name
-	obj, exists, err := c.indexer.GetByKey(key)
-	if err != nil {
-		glog.Errorf("Fetching object with key %s from store failed with %v", key, err)
-		return err
-	}
+	if event.EventType == "Create" {
+		for _, value := range event.Data.Status.Addresses {
+			if value.Type == "InternalIP" {
+				if _,ok := c.NodeList[value.Address]; !ok {
+					c.SyncNodeData()
+					c.LBChannel <- 1
 
-	if !exists {
-		// Below we will warm up our cache with a Pod, so that we will see a delete for one pod
-		// Call LB Delete Function
-		fmt.Printf("Node %s does not exist anymore\n", key)
-	} else {
-		// Note that you also have to check the uid if you have a local controlled resource, which
-		// is dependent on the actual instance, to detect that a Pod was recreated with the same name
-		//service := obj.(*v1.Service)
-		//if service.Spec.Type == "LoadBalancer" {
-		//	fmt.Println(service.GetName())
-		//}
+					fmt.Printf("%s for Node %s\n", event.EventType, event.Data.GetName())
 
-		if event.EventType == "Update" {
-			for _, IpAddr := range obj.(*v1.Node).Status.Addresses {
-				if IpAddr.Type == "InternalIP" {
-					if _ ,ok := c.NodeList[IpAddr.Address]; ok == false {
-						c.NodeList[IpAddr.Address] = struct{}{}
-						c.LBChannel <- 1
-					}
+					return nil
 				}
 			}
-		} else {
-			c.SyncNodeData()
-			c.LBChannel <- 1
 		}
-
-
-		fmt.Printf("%s for Node %s\n",event.EventType, obj.(*v1.Node).GetName())
+	} else {
+		c.SyncNodeData()
+		c.LBChannel <- 1
 	}
+
+	fmt.Printf("%s for Node %s\n", event.EventType, event.Data.GetName())
+
 	return nil
 }
 

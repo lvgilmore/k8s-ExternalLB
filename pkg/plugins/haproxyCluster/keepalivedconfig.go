@@ -32,11 +32,11 @@ const (
 lvs_id haproxy_DH
 }
 # Script used to check if HAProxy is running
-#vrrp_script check_haproxy {
-#script "killall -0 haproxy"
-#interval 2
-#weight 2
-#}
+vrrp_script check_haproxy {
+script "killall -0 haproxy"
+interval 2
+weight 2
+}
 `
 	keepalivedTemplate = `vrrp_instance {{.Name}} {
 state {{.State}}
@@ -48,9 +48,9 @@ virtual_ipaddress_excluded {
 {{range $key, $value := .Servers}}{{$key}}
 {{end}}
 }
-#track_script {
-#check_haproxy
-#}
+track_script {
+check_haproxy
+}
 }`
 )
 
@@ -86,6 +86,18 @@ func (k *KeepalivedConfig)CreateConfigFile() {
 	defer f.Close()
 
 	f.WriteString(k.Config)
+}
+
+func (k *KeepalivedConfig)DeleteVirtualInterface(serviceInstance loadbalancer.ServiceForAgentStruct) {
+	virtualInterface, ok := k.VirtualInterface[serviceInstance.NameSpace]
+
+	if ok {
+		if len(virtualInterface.Servers) == 1 {
+			delete(k.VirtualInterface, serviceInstance.NameSpace)
+		} else {
+			delete(virtualInterface.Servers, serviceInstance.VirtualIp)
+		}
+	}
 }
 
 func (k *KeepalivedConfig)ReloadKeepAliveDConfig() {
