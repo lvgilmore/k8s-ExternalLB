@@ -28,6 +28,7 @@ type VirtualInterface struct {
 }
 const (
 	keepalivedGlobalConfig = `global_defs {
+    debug
     tlived process identifier
 lvs_id haproxy_DH
 }
@@ -42,7 +43,7 @@ weight 2
 state {{.State}}
 interface {{.Interface}}
 virtual_router_id {{.RouterID}}
-priority 101
+#priority 101
 # The virtual ip address shared between the two loadbalancers
 virtual_ipaddress_excluded {
 {{range $key, $value := .Servers}}{{$key}}
@@ -80,12 +81,17 @@ func (k *KeepalivedConfig)CreateConfigFile() {
 
 	f, err := os.Create("/etc/keepalived/keepalived.conf")
 	if err != nil {
-		log.Print(err)
+		log.Println(err)
+	} else {
+		log.Println("Keepalived configuration")
+		log.Println(k.Config)
+
+		defer f.Close()
+
+		f.WriteString(k.Config)
 	}
 
-	defer f.Close()
 
-	f.WriteString(k.Config)
 }
 
 func (k *KeepalivedConfig)DeleteVirtualInterface(serviceInstance loadbalancer.ServiceForAgentStruct) {
@@ -102,7 +108,7 @@ func (k *KeepalivedConfig)DeleteVirtualInterface(serviceInstance loadbalancer.Se
 
 func (k *KeepalivedConfig)ReloadKeepAliveDConfig() {
 	if _, err := os.Stat("/var/run/keepalived.pid"); os.IsNotExist(err) {
-		cmd := exec.Command("/usr/sbin/keepalived")
+		cmd := exec.Command("/usr/sbin/keepalived","--log-console", "--log-detail")
 		stdoutStderr, err := cmd.CombinedOutput()
 		if err != nil {
 			log.Print(err)
@@ -125,7 +131,7 @@ func (k *KeepalivedConfig)ReloadKeepAliveDConfig() {
 
 func (k *KeepalivedConfig)RunKeepAliveD(){
 	if _, err := os.Stat("/var/run/keepalived.pid"); os.IsNotExist(err) {
-		cmd := exec.Command("/usr/sbin/keepalived")
+		cmd := exec.Command("/usr/sbin/keepalived", "--log-console", "--log-detail")
 		stdoutStderr, err := cmd.CombinedOutput()
 		if err != nil {
 			log.Print(err)
@@ -134,5 +140,41 @@ func (k *KeepalivedConfig)RunKeepAliveD(){
 		fmt.Printf("%s\n", stdoutStderr)
 	} else {
 		k.ReloadKeepAliveDConfig()
+	}
+}
+
+func (k *KeepalivedConfig)Stop() {
+	if _, err := os.Stat("/var/run/keepalived.pid"); !os.IsNotExist(err) {
+		cmd := exec.Command("cat", "/var/run/keepalived.pid")
+		pid, _ := cmd.Output()
+
+		log.Println("Stop keepalived process with pid " + string(pid[:len(pid)-1]))
+		cmd = exec.Command("kill", string(pid[:len(pid)-1]))
+		stdoutStderr, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Print(err)
+		}
+
+		fmt.Printf("%s\n", stdoutStderr)
+
+		err = os.Remove("/var/run/keepalived.pid")
+		if err != nil {
+			log.Println(err)
+		}
+	}
+}
+
+func (k *KeepalivedConfig)ClearInterfaces() {
+	for _,namespace := range k.VirtualInterface {
+		for key := range namespace.Servers {
+			log.Println("remove virtual interface addr " + key)
+			cmd := exec.Command("ip", "addr", "del", key + "/32", "dev", namespace.Interface)
+			stdoutStderr, err := cmd.CombinedOutput()
+			if err != nil {
+				log.Print(err)
+			}
+
+			fmt.Printf("%s\n", stdoutStderr)
+		}
 	}
 }

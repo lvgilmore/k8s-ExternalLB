@@ -8,6 +8,7 @@ import (
 	"io"
 	"encoding/json"
 	"strconv"
+	"os"
 )
 
 type Agent struct {
@@ -17,6 +18,7 @@ type Agent struct {
 }
 
 func (a *Agent) Create(w http.ResponseWriter, r *http.Request) {
+	log.Println(" Get create post start working on it")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		log.Panic(err)
@@ -24,23 +26,24 @@ func (a *Agent) Create(w http.ResponseWriter, r *http.Request) {
 
 	var serviceInstance = loadbalancer.ServiceForAgentStruct{}
 	json.Unmarshal(body,&serviceInstance)
+	log.Println("Unmarshal data for the creation")
+	log.Println(serviceInstance)
 	a.SyncTime = serviceInstance.SyncTime
+
+	a.KeepalivedConfig.AddNewVirtualInterface(serviceInstance)
+	a.KeepalivedConfig.CreateConfigFile()
+	a.KeepalivedConfig.ReloadKeepAliveDConfig()
 
 	a.HaproxyConfig.AddNewFarms(serviceInstance)
 
 	a.HaproxyConfig.CreateConfigFile()
 	a.HaproxyConfig.ReloadHaproxyConfig()
 
-	a.KeepalivedConfig.AddNewVirtualInterface(serviceInstance)
-	a.KeepalivedConfig.CreateConfigFile()
-	a.KeepalivedConfig.ReloadKeepAliveDConfig()
-
-
-
 	io.WriteString(w, "OK")
 }
 
 func (a *Agent) Update(w http.ResponseWriter, r *http.Request) {
+	log.Println(" Get update post start working on it")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		log.Panic(err)
@@ -48,17 +51,26 @@ func (a *Agent) Update(w http.ResponseWriter, r *http.Request) {
 
 	var serviceInstance = loadbalancer.ServiceForAgentStruct{}
 	json.Unmarshal(body,&serviceInstance)
-	a.SyncTime = serviceInstance.SyncTime
+	log.Println("Unmarshal data for the creation")
+	log.Println(serviceInstance)
 
-	a.HaproxyConfig.UpdateFarms(serviceInstance)
+	if a.SyncTime != serviceInstance.SyncTime {
+		a.SyncTime = serviceInstance.SyncTime
 
-	a.HaproxyConfig.CreateConfigFile()
-	a.HaproxyConfig.ReloadHaproxyConfig()
+		a.KeepalivedConfig.AddNewVirtualInterface(serviceInstance)
+		a.KeepalivedConfig.CreateConfigFile()
+		a.KeepalivedConfig.ReloadKeepAliveDConfig()
 
+		a.HaproxyConfig.UpdateFarms(serviceInstance)
+
+		a.HaproxyConfig.CreateConfigFile()
+		a.HaproxyConfig.ReloadHaproxyConfig()
+	}
 	io.WriteString(w, "OK")
 }
 
 func (a *Agent) Delete(w http.ResponseWriter, r *http.Request) {
+	log.Println(" Get delete post start working on it")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		log.Panic(err)
@@ -66,6 +78,8 @@ func (a *Agent) Delete(w http.ResponseWriter, r *http.Request) {
 
 	var serviceInstance = loadbalancer.ServiceForAgentStruct{}
 	json.Unmarshal(body,&serviceInstance)
+	log.Println("Unmarshal data for the creation")
+	log.Println(serviceInstance)
 	a.SyncTime = serviceInstance.SyncTime
 
 	a.HaproxyConfig.DeleteFarms(serviceInstance)
@@ -82,16 +96,30 @@ func (a *Agent) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent)Nodes(w http.ResponseWriter, r *http.Request) {
+	log.Println(" Get nodes post start working on it")
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Panic(err)
+	}
 
+	var nodes = []string{}
+	json.Unmarshal(body,&nodes)
+
+	a.HaproxyConfig.UpdateNodes(nodes)
+	a.HaproxyConfig.CreateConfigFile()
+	a.HaproxyConfig.ReloadHaproxyConfig()
 }
 
 func (a *Agent)Sync(w http.ResponseWriter, r *http.Request) {
+	log.Println(" Get sync post start working on it")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		log.Panic(err)
 	}
 	var serviceInstance = []loadbalancer.ServiceForAgentStruct{}
 	json.Unmarshal(body,&serviceInstance)
+	log.Println("Unmarshal data for the creation")
+	log.Println(serviceInstance)
 
 	a.HaproxyConfig.Services = make(map[string]Services)
 	a.KeepalivedConfig.VirtualInterface = make(map[string]VirtualInterface)
@@ -136,12 +164,23 @@ func (a *Agent)StartProcess() {
 	a.KeepalivedConfig.RunKeepAliveD()
 }
 
-func CreateAgentInstance(Interface,State,statsAddress string, statsPort int) (Agent) {
+func (a *Agent)TermSignal(c chan os.Signal) {
+	log.Println("Wating for signal")
+	<-c
+	log.Println("Get TERMSIGNAL clear virtual interfaces")
+	a.KeepalivedConfig.Stop()
+	a.KeepalivedConfig.ClearInterfaces()
+	a.HaproxyConfig.Stop()
+	log.Println("Finnish clearing virtual interfaces")
+
+	os.Exit(0)
+}
+
+func CreateAgentInstance(Interface,State string) (Agent) {
 	return Agent{KeepalivedConfig:KeepalivedConfig{Interface:Interface,
 												   State:State,
 												   VirtualInterface:make(map[string]VirtualInterface)},
-												   HaproxyConfig:HaproxyConfig{Services:make(map[string]Services),
-												   StatsStruct:StatsStruct{Ip:statsAddress,Port:statsPort}},
+												   HaproxyConfig:HaproxyConfig{Services:make(map[string]Services)},
 												   SyncTime:0}
 }
 

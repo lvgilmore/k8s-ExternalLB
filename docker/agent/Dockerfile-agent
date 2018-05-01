@@ -1,0 +1,65 @@
+FROM centos:latest
+
+RUN yum update -y
+
+RUN yum install tar wget \
+        gcc \
+        ipset \
+        iproute \
+        ipset-devel \
+        iptables \
+        iptables-devel \
+        libnfnetlink \
+        libnfnetlink-devel \
+        libnl3 \
+        libnl3-devel \
+        make \
+        musl-devel \
+        openssl \
+        openssl-devel -y
+
+RUN mkdir /install
+
+WORKDIR /install
+
+RUN wget http://www.haproxy.org/download/1.8/src/haproxy-1.8.8.tar.gz
+
+RUN tar xzvf haproxy-1.8.8.tar.gz
+
+WORKDIR /install/haproxy-1.8.8
+
+RUN make TARGET=linux2628
+
+RUN make install
+
+RUN mkdir /etc/haproxy
+
+RUN useradd -m haproxy
+
+RUN usermod -a -G haproxy haproxy
+
+WORKDIR /install
+
+RUN wget http://www.keepalived.org/software/keepalived-1.2.19.tar.gz
+
+RUN tar xzvf keepalived-1.2.19.tar.gz
+
+WORKDIR /install/keepalived-1.2.19
+
+RUN ./configure
+
+RUN make
+
+RUN make install
+
+RUN mkdir /etc/keepalived
+
+RUN cp /usr/local/sbin/keepalived /usr/sbin/keepalived
+
+RUN mkdir /agent
+
+WORKDIR /agent
+
+COPY . /agent/
+
+ENTRYPOINT ["/agent/agent"]

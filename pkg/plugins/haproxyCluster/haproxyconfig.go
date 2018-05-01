@@ -14,7 +14,6 @@ import (
 
 type HaproxyConfig struct {
 	Services map[string]Services
-	StatsStruct StatsStruct
 	Config string
 
 }
@@ -54,6 +53,8 @@ global
         daemon
         #debug
         #quiet
+        stats socket /run/haproxy.sock mode 660 level admin
+        stats timeout 2m # Wait up to 2 minutes for input
 
 defaults
         log     global
@@ -65,16 +66,15 @@ defaults
         timeout client      50000
         timeout server      50000
 
-listen stats # Define a listen section called "stats"
-  bind {{.Ip}}:{{.Port}} 
-  mode http
-  stats enable  # Enable stats page
-  stats hide-version  # Hide HAProxy version
-  stats realm Haproxy\ Statistics  # Title text for popup window
-  stats uri /haproxy_stats  # Stats URI
-  stats auth haproxy:password  # Authentication credentials
-
 `
+	//listen stats # Define a listen section called "stats"
+	//  bind {{.Ip}}:{{.Port}}
+	//  mode http
+	//  stats enable  # Enable stats page
+	//  stats hide-version  # Hide HAProxy version
+	//  stats realm Haproxy\ Statistics  # Title text for popup window
+	//  stats uri /haproxy_stats  # Stats URI
+	//  stats auth haproxy:password  # Authentication credentials
 
 	haproxyTemplate  = `listen {{.Name}}
 	bind {{.BindAddr}}:{{.BindPort}}
@@ -120,13 +120,14 @@ func (h *HaproxyConfig)DeleteFarms(serviceInstance loadbalancer.ServiceForAgentS
 }
 
 func (h *HaproxyConfig)CreateConfigFile() {
-	tmpl, _ := template.New("HaproxyGlobalConfig").Parse(haproxyGlobalConfig)
-	GlobalConfig := new(bytes.Buffer)
-	tmpl.Execute(GlobalConfig, h.StatsStruct)
-	h.Config = GlobalConfig.String()
+	//tmpl, _ := template.New("HaproxyGlobalConfig").Parse(haproxyGlobalConfig)
+	//GlobalConfig := new(bytes.Buffer)
+	//tmpl.Execute(GlobalConfig, h.StatsStruct)
+	//h.Config = GlobalConfig.String()
+	h.Config = haproxyGlobalConfig
 
 
-	tmpl, _ = template.New("HaproxyFarmConfig").Parse(haproxyTemplate)
+	tmpl, _ := template.New("HaproxyFarmConfig").Parse(haproxyTemplate)
 	for _,service := range h.Services {
 		for _, value := range service.Farms {
 			farmConfig := new(bytes.Buffer)
@@ -138,12 +139,29 @@ func (h *HaproxyConfig)CreateConfigFile() {
 	f, err := os.Create("/etc/haproxy/haproxy.cfg")
 	if err != nil {
 		log.Print(err)
+	} else {
+		log.Println("New Configuration")
+		log.Println(h.Config)
+
+		defer f.Close()
+
+		f.WriteString(h.Config)
 	}
 
-	defer f.Close()
+}
 
-	f.WriteString(h.Config)
+func (h *HaproxyConfig)UpdateNodes(nodes []string) {
+	for _,service := range h.Services {
+		for key,farm := range service.Farms {
+			realServers := make([]RealServer, len(nodes))
+			for index,serverValue := range nodes{
+				realServers[index] = RealServer{serverValue,farm.Servers[index].Port}
+			}
 
+			farm.Servers = realServers
+			service.Farms[key] = farm
+		}
+	}
 }
 
 func (h *HaproxyConfig)ReloadHaproxyConfig() {
@@ -166,6 +184,27 @@ func (h *HaproxyConfig)ReloadHaproxyConfig() {
 		}
 
 		fmt.Printf("%s\n", stdoutStderr)
+	}
+}
+
+func (h *HaproxyConfig)Stop(){
+	if _, err := os.Stat("/run/haproxy.pid"); !os.IsNotExist(err) {
+		cmd := exec.Command("cat", "/run/haproxy.pid")
+		pid, _ := cmd.Output()
+
+		log.Println("Stop haproxy process with pid " + string(pid[:len(pid)-1]))
+		cmd = exec.Command("kill", string(pid[:len(pid)-1]))
+		stdoutStderr, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Print(err)
+		}
+
+		fmt.Printf("%s\n", stdoutStderr)
+
+		err = os.Remove("/run/haproxy.pid")
+		if err != nil {
+			log.Println(err)
+		}
 	}
 }
 

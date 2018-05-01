@@ -1,0 +1,11 @@
+FROM centos:latest
+
+RUN yum update -y
+
+RUN mkdir /controller
+
+WORKDIR /controller
+
+COPY . /controller
+
+ENTRYPOINT ["./controller"]

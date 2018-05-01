@@ -93,28 +93,12 @@ func (c *Controller) syncLoadBalancer(event EventData) error {
 		ipAddr, err = c.lbControllerInstance.Delete(event.Data, nodes)
 	}
 
+
 	if err != nil {
 		fmt.Printf("Fail sending data to LB Controller error: %v\n",err)
 		return err
 	} else if ipAddr != ""{
-		// Update Service ip address
-		lbclient := c.clientset.CoreV1().Services(event.Data.ObjectMeta.Namespace)
-		retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-
-			// TODO: Remove this its For Debug Only
-			//ipAddr = "10.0.0.0"
-
-			event.Data.Spec.ExternalIPs = []string{ipAddr}
-			_, updateErr := lbclient.Update(event.Data)
-			if updateErr != nil {
-				return updateErr
-			}
-			return nil
-		})
-		if retryErr != nil {
-			fmt.Printf("Update failed: %v\n", retryErr)
-			return err
-		}
+		return c.updateService(event.Data,ipAddr)
 	}
 
 	return nil
@@ -148,6 +132,7 @@ func (c *Controller) handleErr(err error, key interface{}) {
 }
 
 func (c *Controller) Run(threadiness int, stopCh chan struct{}) {
+
 	defer runtime.HandleCrash()
 
 	// Let the workers stop when we are done
@@ -167,9 +152,51 @@ func (c *Controller) Run(threadiness int, stopCh chan struct{}) {
 	for i := 0; i < threadiness; i++ {
 		go wait.Until(c.runWorker, time.Second, stopCh)
 	}
-
+	go c.Sync()
 	<-stopCh
 	glog.Info("Stopping Pod controller")
+}
+
+func (c *Controller)updateService(service *v1.Service,ipAddr string) error {
+	// Update Service ip address
+	lbclient := c.clientset.CoreV1().Services(service.ObjectMeta.Namespace)
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+
+		// TODO: Remove this its For Debug Only
+		//ipAddr = "10.0.0.0"
+
+		service.Spec.ExternalIPs = []string{ipAddr}
+		_, updateErr := lbclient.Update(service)
+		if updateErr != nil {
+			return updateErr
+		}
+		return nil
+	})
+
+	if retryErr != nil {
+		fmt.Printf("Update failed: %v\n", retryErr)
+		return retryErr
+	}
+
+	return nil
+}
+
+func (c *Controller)Sync() {
+	tick := time.Tick(30 * time.Second)
+	for {
+		<-tick
+		nodes := c.nodeController.GetNodes()
+		for _,value := range c.indexer.List() {
+			if value.(*v1.Service).Spec.Type == "LoadBalancer" {
+				ipAddr, err := c.lbControllerInstance.Update(value.(*v1.Service), nodes)
+				if err != nil {
+					fmt.Printf("Fail sending data to LB Controller error: %v\n",err)
+				} else if ipAddr != ""{
+					c.updateService(value.(*v1.Service),ipAddr)
+				}
+			}
+		}
+	}
 }
 
 func (c *Controller) runWorker() {
