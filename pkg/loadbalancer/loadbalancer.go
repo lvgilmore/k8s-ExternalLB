@@ -274,6 +274,8 @@ func (l *LBController)Create(w http.ResponseWriter, r *http.Request) {
 				l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(serviceDataStruct), string(body), nil)
 				io.WriteString(w, ip)
 			}
+		} else {
+			log.Println("No update needed for " + getServiceName(serviceDataStruct))
 		}
 	}
 }
@@ -330,6 +332,8 @@ func (l *LBController)Delete(w http.ResponseWriter, r *http.Request) {
 		err = l.sendDataToAgents(serviceDataStruct, "Delete")
 		l.DeleteDataFromDB(serviceDataStruct)
 		io.WriteString(w, lbDataStruct.ServiceData.Spec.ExternalIPs[0])
+	} else {
+		log.Println("Service" + lbDataStruct.ServiceData.Namespace+ "-" + lbDataStruct.ServiceData.Name + " is not in the database")
 	}
 
 	io.WriteString(w, "")
@@ -347,13 +351,16 @@ func (l *LBController)Nodes(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Println(err)
 	} else {
+		log.Println("Update Nodes")
 		for _, agent := range l.agents {
 			_, err = http.Post("http://"+agent.IpAddr+"/Nodes", "application/json", bytes.NewBuffer(jsonToAgents))
 
 			if err != nil {
+				log.Println("Agent " + agent.IpAddr + " is down")
 				agent.IsOnline = false
 				log.Print(err)
 			} else {
+				log.Println("Agent " + agent.IpAddr + " is alive")
 				agent.IsOnline = true
 			}
 
@@ -382,6 +389,7 @@ func (l *LBController)SyncAgents() {
 
 	for {
 		<-c
+		log.Println("Syncing with agents")
 		NeedToSyncAgents := []Node{}
 
 		node, err := l.kapi.Get(context.Background(),"/mylb/SyncTime",nil)
@@ -393,9 +401,11 @@ func (l *LBController)SyncAgents() {
 				r, err := http.Post("http://"+value.IpAddr+"/SyncCheck", "application/json", bytes.NewBuffer(syncTime))
 
 				if err != nil {
+					log.Println("Agent " + value.IpAddr + " is down")
 					value.IsOnline = false
 					log.Print(err)
 				} else {
+					log.Println("Agent " + value.IpAddr + " is alive")
 					value.IsOnline = true
 					resp, _ := ioutil.ReadAll(r.Body)
 					if b, _ := strconv.ParseBool(string(resp)); b == true {

@@ -1,6 +1,22 @@
 # K8S-ExternalLB
 external loadbalancer for kubernetes without any cloud provider
 
+## Deployment
+### For the K8S Controller and the Haproxy Controller
+* You need to have a kubernetes cluster running
+* change the configuration in the docker folder for the haproxy controller and the k8s controller
+* Deploy the kubernetes configurations
+
+### For the Agent
+* Need to have a docker host installed
+* Run the docker run command with the variables
+
+```$xslt
+docker run -d --name lb-agent --privileged --cap-add NET_ADMIN --env Prod=TRUE --env interfaceName=<Interface> --env state=<MASTER-SLAVE> --env adminIpInterface=<HostIp> --env adminPort=<port> --network host sebassch/lb-agent
+```
+
+* Dont Run the agent on a kubernetes cluster (kubeproxy will conflict with the haproxy listener)
+
 ## Work in progress
 
 ### HaproxyCluster Controller Todo:
@@ -12,6 +28,7 @@ external loadbalancer for kubernetes without any cloud provider
 
 
 ### HaproxyCluster Agent Todo:
+* create a ansible deployment
 * check the cluster
 * create a production ready haproxy configuration
 * create a production ready keepalived configuration
@@ -20,8 +37,3 @@ external loadbalancer for kubernetes without any cloud provider
 ### k8s controller
 * add more logging messages
 * add tests with ginkgo
-
-## Agent Command
-```$xslt
-docker run -d --name lb-agent --privileged --cap-add ALL --env Prod=TRUE --env interfaceName=ens33 --env state=MASTER --env adminIpInterface=192.168.1.123 --env adminPort=9090 --network host lb-agent
-```

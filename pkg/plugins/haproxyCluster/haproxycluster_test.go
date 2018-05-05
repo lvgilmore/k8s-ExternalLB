@@ -15,8 +15,6 @@ var _ = Describe("Haproxycluster", func() {
 	var (
 		interfaceName = "ens33"
 		state = "MASTER"
-		statsAddress = "192.168.1.124"
-		statsPort = 9000
 
 		haproxyCluster Agent
 		ports = []loadbalancer.Port{loadbalancer.Port{Name:"Test-Port",Port:80,NodePort:32000},loadbalancer.Port{Name:"Test-Port-1",Port:81,NodePort:32001}}
@@ -33,7 +31,7 @@ var _ = Describe("Haproxycluster", func() {
 
 	Describe("loading from JSON", func() {
 		Context("Check haproxy objects", func() {
-			haproxyCluster = CreateAgentInstance(interfaceName, state, statsAddress, statsPort)
+			haproxyCluster = CreateAgentInstance(interfaceName, state)
 			haproxyCluster.HaproxyConfig.AddNewFarms(agentDataStruct)
 			haconfig := haproxyCluster.HaproxyConfig
 

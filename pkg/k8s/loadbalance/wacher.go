@@ -14,6 +14,7 @@ import (
 "github.com/SchSeba/k8s-ExternalLB/pkg/k8s/node"
 "k8s.io/client-go/util/retry"
 "k8s.io/client-go/kubernetes"
+	"log"
 )
 
 type Controller struct {
@@ -185,6 +186,7 @@ func (c *Controller)Sync() {
 	tick := time.Tick(30 * time.Second)
 	for {
 		<-tick
+		log.Println("Syncing all services with the controller")
 		nodes := c.nodeController.GetNodes()
 		for _,value := range c.indexer.List() {
 			if value.(*v1.Service).Spec.Type == "LoadBalancer" {
