@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxyculster-config
+  labels:
+    name: haproxyculster-config
+  namespace: default
+data:
+  config.json: |-
+    {
+    "etcd_end_points" : ["http://192.168.1.124:6666"],
+    "cidr" : "192.168.1.32/27",
+    "agents" : ["192.168.1.123:9090"]
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy-cluster-controller
+  labels:
+    k8s-app: haproxy-cluster-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: haproxy-cluster-controller
+  template:
+    metadata:
+      labels:
+        k8s-app: haproxy-cluster-controller
+    spec:
+      containers:
+      - name: haproxy-cluster-controller
+        image: sebassch/lb-controller
+        env:
+        - name: Prod
+          value: "TRUE"
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+          - name: config-volume
+            mountPath: /controller/config
+      volumes:
+          - name: config-volume
+            configMap:
+              name: haproxyculster-config
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: haproxycluster-service
+spec:
+  selector:
+     k8s-app: haproxy-cluster-controller
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080

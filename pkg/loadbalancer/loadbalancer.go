@@ -16,6 +16,7 @@ import (
 	"k8s.io/api/core/v1"
 	"bytes"
 	"strconv"
+	"fmt"
 )
 
 type Node struct {
@@ -120,8 +121,9 @@ func (l *LBController)getVirtualRouterID(nameSpace string) int {
 		for i := 1; i < 255; i++ {
 			_, err := l.kapi.Get(context.Background(), "/mylb/VirtualRouterID/ID/"+strconv.Itoa(i), nil)
 			if err != nil {
-				err := err.(client.Error)
-				if err.Code == 100 {
+				log.Println(err)
+				errType := fmt.Sprintf("%T", err)
+				if errType == "client.Error" && err.(client.Error).Code == 100 {
 					l.kapi.Set(context.Background(),"/mylb/VirtualRouterID/Namespace/"+ nameSpace,strconv.Itoa(i),nil)
 					l.kapi.Set(context.Background(),"/mylb/VirtualRouterID/ID/"+strconv.Itoa(i),strconv.Itoa(i),nil)
 					return i
@@ -222,6 +224,8 @@ func (l *LBController)Create(w http.ResponseWriter, r *http.Request) {
 	}
 	lbDataStruct := l.unMarshalDataStruct(body)
 
+	// TODO: Check if need to add or update
+
 	var ip string
 	var err error
 
@@ -266,17 +270,35 @@ func (l *LBController)Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lbDataStruct := l.unMarshalDataStruct(body)
-	routerID := l.getVirtualRouterID(lbDataStruct.ServiceData.Namespace)
-	serviceDataStruct := ServiceDataStruct{ServiceData:lbDataStruct.ServiceData,Nodes:lbDataStruct.NodeList,IsCreated:false,RouterID:routerID}
-	err = l.sendDataToAgents(serviceDataStruct, "Update")
-	if err == nil {
-		serviceDataStruct.IsCreated = true
+	resourceVersion := lbDataStruct.ServiceData.ObjectMeta.ResourceVersion
+
+	resp, err := l.kapi.Get(context.Background(),"/mylb/services/"+lbDataStruct.ServiceData.Namespace +"-"+ lbDataStruct.ServiceData.Name,nil)
+	if err != nil {
+		log.Println(err)
+	} else {
+		var serviceDataStruct ServiceDataStruct
+		err := json.Unmarshal([]byte(resp.Node.Value),&serviceDataStruct)
+
+		if err != nil {
+			log.Println(err)
+		} else if serviceDataStruct.ServiceData.ObjectMeta.ResourceVersion != resourceVersion {
+			log.Println("Need to update service " + getServiceName(serviceDataStruct))
+			routerID := l.getVirtualRouterID(lbDataStruct.ServiceData.Namespace)
+			serviceDataStruct = ServiceDataStruct{ServiceData: lbDataStruct.ServiceData, Nodes: lbDataStruct.NodeList, IsCreated: false, RouterID: routerID}
+			err = l.sendDataToAgents(serviceDataStruct, "Update")
+			if err == nil {
+				serviceDataStruct.IsCreated = true
+			}
+
+			body, err = json.Marshal(&serviceDataStruct)
+			l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(serviceDataStruct), string(body), nil)
+
+		} else {
+			log.Println("No update need for service " + getServiceName(serviceDataStruct))
+		}
 	}
 
-	body,err = json.Marshal(&serviceDataStruct)
-	l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(serviceDataStruct), string(body), nil)
 	io.WriteString(w, lbDataStruct.ServiceData.Spec.ExternalIPs[0])
-
 }
 
 func (l *LBController)Delete(w http.ResponseWriter, r *http.Request) {

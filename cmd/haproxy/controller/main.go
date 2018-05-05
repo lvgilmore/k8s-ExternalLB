@@ -24,7 +24,7 @@ type Variabels struct {
 func loadVariables() Variabels{
 	var variables Variabels
 
-	raw, err := ioutil.ReadFile("./config.json")
+	raw, err := ioutil.ReadFile("./config/config.json")
 	if err != nil {
 		log.Panic(err)
 	}

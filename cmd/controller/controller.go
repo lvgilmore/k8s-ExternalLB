@@ -17,11 +17,19 @@ import (
 	"os"
 	//"fmt"
 	"github.com/SchSeba/k8s-ExternalLB/pkg/k8s/node"
+	"log"
+	"strconv"
+	"k8s.io/client-go/rest"
 )
 
 const  (
-	ipAddr = "192.168.1.124"
-	port = 8080
+	ipAddrConst = "192.168.1.124"
+	portConst = 8080
+)
+
+var (
+	ipAddr string
+	port int
 )
 
 func homeDir() string {
@@ -130,36 +138,68 @@ func ServiceControllerStart(clientset *kubernetes.Clientset, nodeController *nod
 	return lbController
 }
 
+func LoadVariables() {
+	if h := os.Getenv("lb-controller-ip"); h == "" {
+		log.Println("Cant find lb-controller-ip env")
+	} else {
+		ipAddr = h
+	}
 
+	if h := os.Getenv("lb-controller-port"); h == "" {
+		log.Println("Cant find lb-controller-port env")
+	} else {
+		port, _ = strconv.Atoi(h)
+	}
+}
 
 func main() {
-	//var kubeconfig string
-	var master string
 
-	//flag.StringVar(&kubeconfig, "kubeconfig", "", "absolute path to the kubeconfig file")
-	//flag.StringVar(&master, "master", "", "master url")
-	//flag.Parse()
+	var clientset *kubernetes.Clientset
 
-	var kubeconfig *string
-	if home := homeDir(); home != "" {
-		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+	if h := os.Getenv("Prod"); h == "TRUE" {
+		log.Println("Load enviroment variables")
+		LoadVariables()
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			panic(err.Error())
+		}
+		// creates the clientset
+		clientset, err = kubernetes.NewForConfig(config)
+		if err != nil {
+			panic(err.Error())
+		}
 	} else {
-		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
-	}
-	flag.Parse()
+		log.Println("Enviroment variables not found use const data (for development only!)")
+		ipAddr = ipAddrConst
+		port = portConst
 
-	// creates the connection
-	config, err := clientcmd.BuildConfigFromFlags(master, *kubeconfig)
-	if err != nil {
-		glog.Fatal(err)
-	}
+		//var kubeconfig string
+		var master string
 
-	// creates the clientset
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		glog.Fatal(err)
-	}
+		//flag.StringVar(&kubeconfig, "kubeconfig", "", "absolute path to the kubeconfig file")
+		//flag.StringVar(&master, "master", "", "master url")
+		//flag.Parse()
 
+		var kubeconfig *string
+		if home := homeDir(); home != "" {
+			kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+		} else {
+			kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
+		}
+		flag.Parse()
+
+		// creates the connection
+		config, err := clientcmd.BuildConfigFromFlags(master, *kubeconfig)
+		if err != nil {
+			glog.Fatal(err)
+		}
+
+		// creates the clientset
+		clientset, err = kubernetes.NewForConfig(config)
+		if err != nil {
+			glog.Fatal(err)
+		}
+	}
 
 	nodeController := NodeControllerStart(clientset)
 	lbController := ServiceControllerStart(clientset,nodeController)

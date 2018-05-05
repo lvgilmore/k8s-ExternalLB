@@ -1,0 +1,64 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: external-lb
+rules:
+- apiGroups: [""] # "" indicates the core API group
+  resources: ["services","nodes"]
+  verbs: ["get", "list","update","watch"]
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: external-lb-sa
+  namespace: default
+
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: external-lb-binding
+subjects:
+- kind: ServiceAccount
+  name: external-lb-account
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: external-lb
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: external-lb-sa
+    namespace: default
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-haproxy-controller
+  labels:
+    k8s-app: k8s-haproxy-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: k8s-haproxy-controller
+  template:
+    metadata:
+      labels:
+        k8s-app: k8s-haproxy-controller
+    spec:
+      serviceAccountName: external-lb-sa
+      containers:
+      - name: haproxy-cluster-controller
+        image: sebassch/k8s-lb-controller
+        env:
+        - name: Prod
+          value: "TRUE"
+        - name: lb-controller-ip
+          value: "haproxycluster-service"
+        - name: lb-controller-port
+          value: "8080"
+        ports:
+        - containerPort: 8000

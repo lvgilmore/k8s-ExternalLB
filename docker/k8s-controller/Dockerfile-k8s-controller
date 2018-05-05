@@ -1,0 +1,11 @@
+FROM centos:latest
+
+RUN yum update -y
+
+RUN mkdir /k8s
+
+WORKDIR /k8s
+
+COPY . /k8s
+
+ENTRYPOINT ["./k8s"]
