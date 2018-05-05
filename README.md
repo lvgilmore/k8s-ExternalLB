@@ -6,7 +6,10 @@ external loadbalancer for kubernetes without any cloud provider
 * You need to have a kubernetes cluster running
 * change the configuration in the docker folder for the haproxy controller and the k8s controller
 * Deploy the kubernetes configurations
-
+```
+kubectl apply -f docker/k8s-controller/k8s-deployment.yaml
+kubectl apply -f docker/haproxycluster/k8s-deployment.yaml
+```
 ### For the Agent
 * Need to have a docker host installed
 * Run the docker run command with the variables
