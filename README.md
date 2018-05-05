@@ -20,7 +20,6 @@ docker run -d --name lb-agent --privileged --cap-add NET_ADMIN --env Prod=TRUE -
 ## Work in progress
 
 ### HaproxyCluster Controller Todo:
-* check if need to send update
 * Add more logging messages
 * add tests with ginkgo
 * create config map
