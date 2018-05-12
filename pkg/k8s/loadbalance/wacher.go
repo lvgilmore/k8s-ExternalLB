@@ -1,20 +1,21 @@
 package loadbalance
 
 import (
-"fmt"
-"time"
+	"fmt"
+	"time"
 
-"github.com/golang/glog"
+	"github.com/golang/glog"
 
-"k8s.io/api/core/v1"
-"k8s.io/apimachinery/pkg/util/runtime"
-"k8s.io/apimachinery/pkg/util/wait"
-"k8s.io/client-go/tools/cache"
-"k8s.io/client-go/util/workqueue"
-"github.com/SchSeba/k8s-ExternalLB/pkg/k8s/node"
-"k8s.io/client-go/util/retry"
-"k8s.io/client-go/kubernetes"
+	"k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
+	"github.com/SchSeba/k8s-ExternalLB/pkg/k8s/node"
+	"k8s.io/client-go/util/retry"
+	"k8s.io/client-go/kubernetes"
 	"log"
+
 )
 
 type Controller struct {
@@ -98,11 +99,10 @@ func (c *Controller) syncLoadBalancer(event EventData) error {
 	if err != nil {
 		fmt.Printf("Fail sending data to LB Controller error: %v\n",err)
 		return err
-	} else if ipAddr != ""{
+	} else {
 		return c.updateService(event.Data,ipAddr)
 	}
 
-	return nil
 }
 
 
@@ -153,7 +153,9 @@ func (c *Controller) Run(threadiness int, stopCh chan struct{}) {
 	for i := 0; i < threadiness; i++ {
 		go wait.Until(c.runWorker, time.Second, stopCh)
 	}
-	go c.Sync()
+
+	// TODO: Need to fix this
+	//go c.Sync()
 	<-stopCh
 	glog.Info("Stopping Pod controller")
 }

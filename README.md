@@ -39,3 +39,7 @@ docker run -d --name lb-agent --privileged --cap-add NET_ADMIN --env Prod=TRUE -
 ### k8s controller
 * add more logging messages
 * add tests with ginkgo
+
+
+### Run the Grpc
+```protoc externallb/externalLB.proto --go_out=plugins=grpc:```

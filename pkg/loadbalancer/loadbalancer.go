@@ -8,12 +8,11 @@ import (
 	"net/http"
 	"context"
 	"errors"
-	"io"
 	"k8s.io/apimachinery/pkg/util/json"
 	"github.com/SchSeba/k8s-ExternalLB/pkg/k8s/loadbalance"
-	"io/ioutil"
 	"sync"
-	"k8s.io/api/core/v1"
+	//"k8s.io/api/core/v1"
+	pb "github.com/SchSeba/k8s-ExternalLB/pkg/externallb"
 	"bytes"
 	"strconv"
 	"fmt"
@@ -33,12 +32,12 @@ type LBController struct {
 	mutex *sync.Mutex
 }
 
-type ServiceDataStruct struct {
-	ServiceData *v1.Service `json:"service_data"`
-	Nodes []string `json:"nodes"`
-	IsCreated bool `json:"is_created"`
-	RouterID int `json:"router_id"`
-}
+//type ServiceDataStruct struct {
+//	ServiceData *v1.Service `json:"service_data"`
+//	Nodes []string `json:"nodes"`
+//	IsCreated bool `json:"is_created"`
+//	RouterID int `json:"router_id"`
+//}
 
 type ServiceForAgentStruct struct {
 	Name string      `json:"name"`
@@ -47,7 +46,7 @@ type ServiceForAgentStruct struct {
 	Nodes []string   `json:"nodes"`
 	Protocol string  `json:"protocol"`
 	Ports []Port     `json:"ports"`
-	RouterID int `json:"router_id"`
+	RouterID int32 `json:"router_id"`
 	SyncTime int64 `json:"sync_time"`
 }
 
@@ -57,25 +56,25 @@ type Port struct {
 	NodePort int32 `json:"node_port"`
 }
 
-func getAgentStruct(serviceDataStruct ServiceDataStruct,syncTime int64) ServiceForAgentStruct {
-	ports := make([]Port, len(serviceDataStruct.ServiceData.Spec.Ports))
+func getAgentStruct(serviceDataStruct *pb.Data,syncTime int64) ServiceForAgentStruct {
+	ports := make([]Port, len(serviceDataStruct.Ports))
 
-	for index, value := range serviceDataStruct.ServiceData.Spec.Ports {
+	for index, value := range serviceDataStruct.Ports {
 		ports[index] = Port{Name:value.Name,Port:value.Port,NodePort:value.NodePort}
 	}
 
-	serviceForAgentInstance := ServiceForAgentStruct{VirtualIp:serviceDataStruct.ServiceData.Spec.ExternalIPs[0],
+	serviceForAgentInstance := ServiceForAgentStruct{VirtualIp:serviceDataStruct.ExternalIPs[0],
 													 Nodes:serviceDataStruct.Nodes,
-													 Protocol:string(serviceDataStruct.ServiceData.Spec.Ports[0].Protocol),
+													 Protocol:string(serviceDataStruct.Protocol),
 													 Ports:ports,
 													 RouterID:serviceDataStruct.RouterID,
 													 Name:getServiceName(serviceDataStruct),
-													 NameSpace:serviceDataStruct.ServiceData.Namespace,SyncTime:syncTime}
+													 NameSpace:serviceDataStruct.Namespace,SyncTime:syncTime}
 
 	return serviceForAgentInstance
 }
 
-func convertToAgentStruct(serviceDataStruct ServiceDataStruct,syncTime int64) ([]byte,error) {
+func convertToAgentStruct(serviceDataStruct *pb.Data,syncTime int64) ([]byte,error) {
 	serviceForAgentInstance := getAgentStruct(serviceDataStruct,syncTime)
 
 	body,err := json.Marshal(&serviceForAgentInstance)
@@ -93,8 +92,8 @@ func (l *LBController)unMarshalDataStruct(body []byte) ( loadbalance.LbDataStruc
 	return  lbDataStruct
 }
 
-func getServiceName(serviceData ServiceDataStruct) string {
-	return serviceData.ServiceData.Namespace+"-"+serviceData.ServiceData.Name
+func getServiceName(serviceData *pb.Data) string {
+	return serviceData.Namespace+"-"+serviceData.ServiceName
 }
 
 func (l *LBController)GetEmptyIp() (string, error) {
@@ -112,11 +111,11 @@ func (l *LBController)GetEmptyIp() (string, error) {
 	return "", errors.New("Fail to find any Key")
 }
 
-func (l *LBController)getVirtualRouterID(nameSpace string) int {
+func (l *LBController)getVirtualRouterID(nameSpace string) (int32, error){
 	value, err := l.kapi.Get(context.Background(), "/mylb/VirtualRouterID/Namespace/"+ nameSpace, nil)
 	if err == nil {
 		i , _ := strconv.Atoi(value.Node.Value)
-		return i
+		return int32(i), nil
 	} else {
 		for i := 1; i < 255; i++ {
 			_, err := l.kapi.Get(context.Background(), "/mylb/VirtualRouterID/ID/"+strconv.Itoa(i), nil)
@@ -126,12 +125,12 @@ func (l *LBController)getVirtualRouterID(nameSpace string) int {
 				if errType == "client.Error" && err.(client.Error).Code == 100 {
 					l.kapi.Set(context.Background(),"/mylb/VirtualRouterID/Namespace/"+ nameSpace,strconv.Itoa(i),nil)
 					l.kapi.Set(context.Background(),"/mylb/VirtualRouterID/ID/"+strconv.Itoa(i),strconv.Itoa(i),nil)
-					return i
+					return int32(i), nil
 				}
 			}
 		}
 
-		return -1
+		return int32(-1), errors.New("Fail to Get Virtual RouterID")
 	}
 }
 
@@ -152,6 +151,11 @@ func (l *LBController)ClearDB() {
 	if err != nil {
 		log.Println(err)
 	}
+
+	_,err = l.kapi.Delete(context.Background(), "/mylb/services/",&client.DeleteOptions{Recursive:true,Dir:true})
+	if err != nil {
+		log.Println(err)
+	}
 	//for i := 1; i < 255; i++ {
 	//	_, err := l.kapi.Get(context.Background(), "/mylb/VirtualRouterID/ID/"+string(i), nil)
 	//	if err == nil {
@@ -160,7 +164,7 @@ func (l *LBController)ClearDB() {
 	//}
 }
 
-func (l *LBController)sendDataToAgents(serviceDataStruct ServiceDataStruct, commandType string) (error) {
+func (l *LBController)sendDataToAgents(serviceDataStruct *pb.Data, commandType string) (error) {
 	syncTime := time.Now().Unix()
 	l.kapi.Set(context.Background(), "/mylb/SyncTime",strconv.FormatInt(syncTime,10),nil)
 
@@ -193,253 +197,337 @@ func (l *LBController)sendDataToAgents(serviceDataStruct ServiceDataStruct, comm
 	return nil
 }
 
-func (l *LBController)DeleteDataFromDB(serviceDataStruct ServiceDataStruct) {
-	// Remove Ip
-	_, err := l.kapi.Delete(context.Background(), "/mylb/allocatedIps/"+serviceDataStruct.ServiceData.Spec.ExternalIPs[0], nil)
+//func (l *LBController)DeleteDataFromDB(serviceDataStruct ServiceDataStruct) {
+//	// Remove Ip
+//	_, err := l.kapi.Delete(context.Background(), "/mylb/allocatedIps/"+serviceDataStruct.ServiceData.Spec.ExternalIPs[0], nil)
+//	if err != nil {
+//		log.Println(err)
+//	}
+//
+//	// remove Virtual Router
+//	_, err = l.kapi.Delete(context.Background(), "/mylb/VirtualRouterID/Namespace/"+ serviceDataStruct.ServiceData.Namespace, nil)
+//	if err != nil {
+//		log.Println(err)
+//	}
+//
+//	_, err = l.kapi.Delete(context.Background(), "/mylb/VirtualRouterID/ID/"+strconv.Itoa(serviceDataStruct.RouterID), nil)
+//	if err != nil {
+//		log.Println(err)
+//	}
+//
+//	// Remove Service Data
+//	_, err = l.kapi.Delete(context.Background(), "/mylb/services/"+getServiceName(serviceDataStruct), nil)
+//	if err != nil {
+//		log.Println(err)
+//	}
+//
+//}
+
+func (l *LBController)Create(ctx context.Context,data *pb.Data) (*pb.Result, error) {
+	IsExist := true
+	resp, err := l.kapi.Get(context.Background(),"/mylb/services/"+data.Namespace +"-"+ data.ServiceName,nil)
+	errType := fmt.Sprintf("%T", err)
 	if err != nil {
-		log.Println(err)
-	}
-
-	// remove Virtual Router
-	_, err = l.kapi.Delete(context.Background(), "/mylb/VirtualRouterID/Namespace/"+ serviceDataStruct.ServiceData.Namespace, nil)
-	if err != nil {
-		log.Println(err)
-	}
-
-	_, err = l.kapi.Delete(context.Background(), "/mylb/VirtualRouterID/ID/"+strconv.Itoa(serviceDataStruct.RouterID), nil)
-	if err != nil {
-		log.Println(err)
-	}
-
-	// Remove Service Data
-	_, err = l.kapi.Delete(context.Background(), "/mylb/services/"+getServiceName(serviceDataStruct), nil)
-	if err != nil {
-		log.Println(err)
-	}
-
-}
-
-func (l *LBController)Create(w http.ResponseWriter, r *http.Request) {
-	body, errIO := ioutil.ReadAll(r.Body)
-	if errIO != nil {
-		log.Panic(errIO)
-	}
-	lbDataStruct := l.unMarshalDataStruct(body)
-	resourceVersion := lbDataStruct.ServiceData.ObjectMeta.ResourceVersion
-
-	resp, err := l.kapi.Get(context.Background(),"/mylb/services/"+lbDataStruct.ServiceData.Namespace +"-"+ lbDataStruct.ServiceData.Name,nil)
-	if err != nil {
-		log.Println(err)
-	} else {
-		var serviceDataStruct ServiceDataStruct
-		err := json.Unmarshal([]byte(resp.Node.Value), &serviceDataStruct)
-
-		if err != nil {
-			log.Println(err)
-		} else if serviceDataStruct.ServiceData.ObjectMeta.ResourceVersion != resourceVersion {
-			log.Println("Need to update service " + getServiceName(serviceDataStruct))
-
-			var ip string
-			var err error
-
-			l.mutex.Lock()
-
-			if len(lbDataStruct.ServiceData.Spec.ExternalIPs) == 0 {
-				ip, err = l.GetEmptyIp()
-			} else {
-				ip = lbDataStruct.ServiceData.Spec.ExternalIPs[0]
-				err = nil
-			}
-
-			// TODO: REMOVE FOR DEBUG ONLY
-			//ip , err = l.GetEmptyIp()
-
-			if err != nil {
-				log.Print(err)
-				l.mutex.Unlock()
-				io.WriteString(w, "")
-			} else {
-				l.kapi.Set(context.Background(), "/mylb/allocatedIps/"+ip, lbDataStruct.ServiceData.Namespace+"-"+lbDataStruct.ServiceData.Name, nil)
-				routerID := l.getVirtualRouterID(lbDataStruct.ServiceData.Namespace)
-				l.mutex.Unlock()
-
-				lbDataStruct.ServiceData.Spec.ExternalIPs = []string{ip}
-				serviceDataStruct := ServiceDataStruct{ServiceData: lbDataStruct.ServiceData, Nodes: lbDataStruct.NodeList, IsCreated: false, RouterID: routerID}
-				err = l.sendDataToAgents(serviceDataStruct, "Create")
-				if err == nil {
-					serviceDataStruct.IsCreated = true
-				}
-
-				body, err = json.Marshal(&serviceDataStruct)
-				l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(serviceDataStruct), string(body), nil)
-				io.WriteString(w, ip)
-			}
+		if errType == "client.Error" && err.(client.Error).Code == 100 {
+			IsExist = false
 		} else {
-			log.Println("No update needed for " + getServiceName(serviceDataStruct))
-		}
-	}
-}
-
-func (l *LBController)Update(w http.ResponseWriter, r *http.Request) {
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		log.Panic(err)
-	}
-
-	lbDataStruct := l.unMarshalDataStruct(body)
-	resourceVersion := lbDataStruct.ServiceData.ObjectMeta.ResourceVersion
-
-	resp, err := l.kapi.Get(context.Background(),"/mylb/services/"+lbDataStruct.ServiceData.Namespace +"-"+ lbDataStruct.ServiceData.Name,nil)
-	if err != nil {
-		log.Println(err)
-	} else {
-		var serviceDataStruct ServiceDataStruct
-		err := json.Unmarshal([]byte(resp.Node.Value),&serviceDataStruct)
-
-		if err != nil {
 			log.Println(err)
-		} else if serviceDataStruct.ServiceData.ObjectMeta.ResourceVersion != resourceVersion {
-			log.Println("Need to update service " + getServiceName(serviceDataStruct))
-			routerID := l.getVirtualRouterID(lbDataStruct.ServiceData.Namespace)
-			serviceDataStruct = ServiceDataStruct{ServiceData: lbDataStruct.ServiceData, Nodes: lbDataStruct.NodeList, IsCreated: false, RouterID: routerID}
-			err = l.sendDataToAgents(serviceDataStruct, "Update")
-			if err == nil {
-				serviceDataStruct.IsCreated = true
-			}
-
-			body, err = json.Marshal(&serviceDataStruct)
-			l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(serviceDataStruct), string(body), nil)
-
-		} else {
-			log.Println("No update need for service " + getServiceName(serviceDataStruct))
+			return nil, err
 		}
 	}
 
-	io.WriteString(w, lbDataStruct.ServiceData.Spec.ExternalIPs[0])
-}
+	if IsExist {
+		log.Println("Service already exist. check if update is needed")
+		var serviceData pb.Data
 
-func (l *LBController)Delete(w http.ResponseWriter, r *http.Request) {
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		log.Panic(err)
+		err = json.Unmarshal([]byte(resp.Node.Value), &serviceData)
+		if err != nil {
+			log.Println(err)
+
+			return nil, err
+		}
+
+		if serviceData.ResourceVersion == data.ResourceVersion {
+			log.Println("No update needed")
+			return &pb.Result{Addr: serviceData.ExternalIPs[0]}, nil
+		} else {
+			return l.Update(ctx ,data)
+		}
 	}
 
-	lbDataStruct:= l.unMarshalDataStruct(body)
-	value, err := l.kapi.Get(context.Background(), "/mylb/services/"+ lbDataStruct.ServiceData.Namespace+ "-" + lbDataStruct.ServiceData.Name, nil)
+	log.Println("Need to Create service " + getServiceName(data))
+	var ip string
+
+	l.mutex.Lock()
+	if len(data.ExternalIPs) == 0 {
+		ip, err = l.GetEmptyIp()
+	} else {
+		ip = data.ExternalIPs[0]
+		err = nil
+	}
+
+	if err != nil {
+		log.Print(err)
+		l.mutex.Unlock()
+
+		return nil, err
+	}
+
+	l.kapi.Set(context.Background(), "/mylb/allocatedIps/"+ip, getServiceName(data), nil)
+	routerID, err := l.getVirtualRouterID(data.Namespace)
+	l.mutex.Unlock()
+	if err != nil {
+		log.Println(err)
+
+		return nil, err
+	}
+
+	data.ExternalIPs = []string{ip}
+	data.RouterID = routerID
+	err = l.sendDataToAgents(data, "Create")
+	if err != nil {
+		log.Println(err)
+
+		return nil, err
+	}
+
+	err = l.sendDataToAgents(data, "Create")
 	if err == nil {
-		var serviceDataStruct = ServiceDataStruct{}
-		json.Unmarshal([]byte(value.Node.Value),&serviceDataStruct)
-		err = l.sendDataToAgents(serviceDataStruct, "Delete")
-		l.DeleteDataFromDB(serviceDataStruct)
-		io.WriteString(w, lbDataStruct.ServiceData.Spec.ExternalIPs[0])
-	} else {
-		log.Println("Service" + lbDataStruct.ServiceData.Namespace+ "-" + lbDataStruct.ServiceData.Name + " is not in the database")
+		data.IsCreated = true
 	}
 
-	io.WriteString(w, "")
+	body, err := json.Marshal(data)
+	l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(data), string(body), nil)
+
+	return &pb.Result{Addr:data.ExternalIPs[0]}, nil
 }
 
-func (l *LBController)Nodes(w http.ResponseWriter, r *http.Request) {
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		log.Panic(err)
-	}
-
-	lbDataStruct:= l.unMarshalDataStruct(body)
-	jsonToAgents, err := json.Marshal(lbDataStruct.NodeList)
-
-	if err != nil {
-		log.Println(err)
-	} else {
-		log.Println("Update Nodes")
-		for _, agent := range l.agents {
-			_, err = http.Post("http://"+agent.IpAddr+"/Nodes", "application/json", bytes.NewBuffer(jsonToAgents))
-
-			if err != nil {
-				log.Println("Agent " + agent.IpAddr + " is down")
-				agent.IsOnline = false
-				log.Print(err)
-			} else {
-				log.Println("Agent " + agent.IpAddr + " is alive")
-				agent.IsOnline = true
-			}
-
-		}
-
-		directory, err := l.kapi.Get(context.Background(), "/mylb/services/", nil)
-		if err != nil {
-			log.Println(err)
-			io.WriteString(w, "")
-		}
-
-		for _, node := range directory.Node.Nodes {
-			var serviceDataInstance = ServiceDataStruct{}
-			json.Unmarshal([]byte(node.Value), &serviceDataInstance)
-			serviceDataInstance.Nodes = lbDataStruct.NodeList
-			body, err = json.Marshal(&serviceDataInstance)
-			l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(serviceDataInstance), string(body), nil)
-		}
-
-		io.WriteString(w, "OK")
-	}
+func (l *LBController)Update(ctx context.Context,data *pb.Data) (*pb.Result, error) {
+	return nil, nil
 }
 
-func (l *LBController)SyncAgents() {
-	c := time.Tick(10 * time.Second)
-
-	for {
-		<-c
-		log.Println("Syncing with agents")
-		NeedToSyncAgents := []Node{}
-
-		node, err := l.kapi.Get(context.Background(),"/mylb/SyncTime",nil)
-		if err == nil {
-
-			syncTime := []byte(node.Node.Value)
-			syncTimeInt, _ := strconv.ParseInt(node.Node.Value,10,64)
-			for _, value := range l.agents {
-				r, err := http.Post("http://"+value.IpAddr+"/SyncCheck", "application/json", bytes.NewBuffer(syncTime))
-
-				if err != nil {
-					log.Println("Agent " + value.IpAddr + " is down")
-					value.IsOnline = false
-					log.Print(err)
-				} else {
-					log.Println("Agent " + value.IpAddr + " is alive")
-					value.IsOnline = true
-					resp, _ := ioutil.ReadAll(r.Body)
-					if b, _ := strconv.ParseBool(string(resp)); b == true {
-						NeedToSyncAgents = append(NeedToSyncAgents, value)
-					}
-				}
-			}
-
-			if len(NeedToSyncAgents) > 0 {
-				syncData := []ServiceForAgentStruct{}
-				services, err := l.kapi.Get(context.Background(), "/mylb/services/", nil)
-				if err != nil {
-					log.Println(err)
-				} else {
-					for _, value := range services.Node.Nodes {
-						var serviceData ServiceDataStruct
-						json.Unmarshal([]byte(value.Value), &serviceData)
-						syncData = append(syncData, getAgentStruct(serviceData, syncTimeInt))
-					}
-				}
-
-				syncDataByte, err := json.Marshal(&syncData)
-				if err != nil {
-					log.Println(err)
-				} else {
-					for _, value := range NeedToSyncAgents {
-						_, err = http.Post("http://"+value.IpAddr+"/Sync", "application/json", bytes.NewBuffer(syncDataByte))
-					}
-				}
-			}
-		}
-	}
-
-}
+//
+//func (l *LBController)Created(w http.ResponseWriter, r *http.Request) {
+//	body, errIO := ioutil.ReadAll(r.Body)
+//	if errIO != nil {
+//		log.Panic(errIO)
+//	}
+//	lbDataStruct := l.unMarshalDataStruct(body)
+//	resourceVersion := lbDataStruct.ServiceData.ObjectMeta.ResourceVersion
+//
+//	resp, err := l.kapi.Get(context.Background(),"/mylb/services/"+lbDataStruct.ServiceData.Namespace +"-"+ lbDataStruct.ServiceData.Name,nil)
+//	if err != nil {
+//		log.Println(err)
+//	} else {
+//		var serviceDataStruct ServiceDataStruct
+//		err := json.Unmarshal([]byte(resp.Node.Value), &serviceDataStruct)
+//
+//		if err != nil {
+//			log.Println(err)
+//		} else if serviceDataStruct.ServiceData.ObjectMeta.ResourceVersion != resourceVersion {
+//			log.Println("Need to update service " + getServiceName(serviceDataStruct))
+//
+//			var ip string
+//			var err error
+//
+//			l.mutex.Lock()
+//
+//			if len(lbDataStruct.ServiceData.Spec.ExternalIPs) == 0 {
+//				ip, err = l.GetEmptyIp()
+//			} else {
+//				ip = lbDataStruct.ServiceData.Spec.ExternalIPs[0]
+//				err = nil
+//			}
+//
+//			// TODO: REMOVE FOR DEBUG ONLY
+//			//ip , err = l.GetEmptyIp()
+//
+//			if err != nil {
+//				log.Print(err)
+//				l.mutex.Unlock()
+//				io.WriteString(w, "")
+//			} else {
+//				l.kapi.Set(context.Background(), "/mylb/allocatedIps/"+ip, lbDataStruct.ServiceData.Namespace+"-"+lbDataStruct.ServiceData.Name, nil)
+//				routerID := l.getVirtualRouterID(lbDataStruct.ServiceData.Namespace)
+//				l.mutex.Unlock()
+//
+//				lbDataStruct.ServiceData.Spec.ExternalIPs = []string{ip}
+//				serviceDataStruct := ServiceDataStruct{ServiceData: lbDataStruct.ServiceData, Nodes: lbDataStruct.NodeList, IsCreated: false, RouterID: routerID}
+//				err = l.sendDataToAgents(serviceDataStruct, "Create")
+//				if err == nil {
+//					serviceDataStruct.IsCreated = true
+//				}
+//
+//				body, err = json.Marshal(&serviceDataStruct)
+//				l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(serviceDataStruct), string(body), nil)
+//				io.WriteString(w, ip)
+//			}
+//		} else {
+//			log.Println("No update needed for " + getServiceName(serviceDataStruct))
+//		}
+//	}
+//}
+//
+//func (l *LBController)Update(w http.ResponseWriter, r *http.Request) {
+//	body, err := ioutil.ReadAll(r.Body)
+//	if err != nil {
+//		log.Panic(err)
+//	}
+//
+//	lbDataStruct := l.unMarshalDataStruct(body)
+//	resourceVersion := lbDataStruct.ServiceData.ObjectMeta.ResourceVersion
+//
+//	resp, err := l.kapi.Get(context.Background(),"/mylb/services/"+lbDataStruct.ServiceData.Namespace +"-"+ lbDataStruct.ServiceData.Name,nil)
+//	if err != nil {
+//		log.Println(err)
+//	} else {
+//		var serviceDataStruct ServiceDataStruct
+//		err := json.Unmarshal([]byte(resp.Node.Value),&serviceDataStruct)
+//
+//		if err != nil {
+//			log.Println(err)
+//		} else if serviceDataStruct.ServiceData.ObjectMeta.ResourceVersion != resourceVersion {
+//			log.Println("Need to update service " + getServiceName(serviceDataStruct))
+//			routerID := l.getVirtualRouterID(lbDataStruct.ServiceData.Namespace)
+//			serviceDataStruct = ServiceDataStruct{ServiceData: lbDataStruct.ServiceData, Nodes: lbDataStruct.NodeList, IsCreated: false, RouterID: routerID}
+//			err = l.sendDataToAgents(serviceDataStruct, "Update")
+//			if err == nil {
+//				serviceDataStruct.IsCreated = true
+//			}
+//
+//			body, err = json.Marshal(&serviceDataStruct)
+//			l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(serviceDataStruct), string(body), nil)
+//
+//		} else {
+//			log.Println("No update need for service " + getServiceName(serviceDataStruct))
+//		}
+//	}
+//
+//	io.WriteString(w, lbDataStruct.ServiceData.Spec.ExternalIPs[0])
+//}
+//
+//func (l *LBController)Delete(w http.ResponseWriter, r *http.Request) {
+//	body, err := ioutil.ReadAll(r.Body)
+//	if err != nil {
+//		log.Panic(err)
+//	}
+//
+//	lbDataStruct:= l.unMarshalDataStruct(body)
+//	value, err := l.kapi.Get(context.Background(), "/mylb/services/"+ lbDataStruct.ServiceData.Namespace+ "-" + lbDataStruct.ServiceData.Name, nil)
+//	if err == nil {
+//		var serviceDataStruct = ServiceDataStruct{}
+//		json.Unmarshal([]byte(value.Node.Value),&serviceDataStruct)
+//		err = l.sendDataToAgents(serviceDataStruct, "Delete")
+//		l.DeleteDataFromDB(serviceDataStruct)
+//		io.WriteString(w, lbDataStruct.ServiceData.Spec.ExternalIPs[0])
+//	} else {
+//		log.Println("Service" + lbDataStruct.ServiceData.Namespace+ "-" + lbDataStruct.ServiceData.Name + " is not in the database")
+//	}
+//
+//	io.WriteString(w, "")
+//}
+//
+//func (l *LBController)Nodes(w http.ResponseWriter, r *http.Request) {
+//	body, err := ioutil.ReadAll(r.Body)
+//	if err != nil {
+//		log.Panic(err)
+//	}
+//
+//	lbDataStruct:= l.unMarshalDataStruct(body)
+//	jsonToAgents, err := json.Marshal(lbDataStruct.NodeList)
+//
+//	if err != nil {
+//		log.Println(err)
+//	} else {
+//		log.Println("Update Nodes")
+//		for _, agent := range l.agents {
+//			_, err = http.Post("http://"+agent.IpAddr+"/Nodes", "application/json", bytes.NewBuffer(jsonToAgents))
+//
+//			if err != nil {
+//				log.Println("Agent " + agent.IpAddr + " is down")
+//				agent.IsOnline = false
+//				log.Print(err)
+//			} else {
+//				log.Println("Agent " + agent.IpAddr + " is alive")
+//				agent.IsOnline = true
+//			}
+//
+//		}
+//
+//		directory, err := l.kapi.Get(context.Background(), "/mylb/services/", nil)
+//		if err != nil {
+//			log.Println(err)
+//			io.WriteString(w, "")
+//		}
+//
+//		for _, node := range directory.Node.Nodes {
+//			var serviceDataInstance = ServiceDataStruct{}
+//			json.Unmarshal([]byte(node.Value), &serviceDataInstance)
+//			serviceDataInstance.Nodes = lbDataStruct.NodeList
+//			body, err = json.Marshal(&serviceDataInstance)
+//			l.kapi.Set(context.Background(), "/mylb/services/"+getServiceName(serviceDataInstance), string(body), nil)
+//		}
+//
+//		io.WriteString(w, "OK")
+//	}
+//}
+//
+//func (l *LBController)SyncAgents() {
+//	c := time.Tick(10 * time.Second)
+//
+//	for {
+//		<-c
+//		log.Println("Syncing with agents")
+//		NeedToSyncAgents := []Node{}
+//
+//		node, err := l.kapi.Get(context.Background(),"/mylb/SyncTime",nil)
+//		if err == nil {
+//
+//			syncTime := []byte(node.Node.Value)
+//			syncTimeInt, _ := strconv.ParseInt(node.Node.Value,10,64)
+//			for _, value := range l.agents {
+//				r, err := http.Post("http://"+value.IpAddr+"/SyncCheck", "application/json", bytes.NewBuffer(syncTime))
+//
+//				if err != nil {
+//					log.Println("Agent " + value.IpAddr + " is down")
+//					value.IsOnline = false
+//					log.Print(err)
+//				} else {
+//					log.Println("Agent " + value.IpAddr + " is alive")
+//					value.IsOnline = true
+//					resp, _ := ioutil.ReadAll(r.Body)
+//					if b, _ := strconv.ParseBool(string(resp)); b == true {
+//						NeedToSyncAgents = append(NeedToSyncAgents, value)
+//					}
+//				}
+//			}
+//
+//			if len(NeedToSyncAgents) > 0 {
+//				syncData := []ServiceForAgentStruct{}
+//				services, err := l.kapi.Get(context.Background(), "/mylb/services/", nil)
+//				if err != nil {
+//					log.Println(err)
+//				} else {
+//					for _, value := range services.Node.Nodes {
+//						var serviceData ServiceDataStruct
+//						json.Unmarshal([]byte(value.Value), &serviceData)
+//						syncData = append(syncData, getAgentStruct(serviceData, syncTimeInt))
+//					}
+//				}
+//
+//				syncDataByte, err := json.Marshal(&syncData)
+//				if err != nil {
+//					log.Println(err)
+//				} else {
+//					for _, value := range NeedToSyncAgents {
+//						_, err = http.Post("http://"+value.IpAddr+"/Sync", "application/json", bytes.NewBuffer(syncDataByte))
+//					}
+//				}
+//			}
+//		}
+//	}
+//
+//}
 
 func LBControllerInitializer(Endpoints []string,Nodes []string,cidr string) *LBController {
 

@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package grpc;
+
+service ExternalLB {
+
+    rpc Create(Data) returns (Result) {}
+    rpc Update(Data) returns (Result) {}
+    rpc Delete(Data) returns (Result) {}
+    rpc NodesChange(Nodes) returns (UpdateService) {}
+
+    rpc Sync(stream Data) returns (stream UpdateService) {}
+}
+
+message Data {
+    string ServiceName = 1;
+    string Namespace = 2;
+    string ResourceVersion = 3;
+    string Protocol = 4;
+    repeated string ExternalIPs = 5;
+    int32 RouterID = 6;
+    int64 SyncTime = 7;
+    bool IsCreated = 8;
+    repeated string nodes = 9;
+    repeated Port Ports = 10;
+}
+
+message Port {
+    string Name = 1;
+    int32 Port = 2;
+    int32 NodePort = 3;
+}
+
+message Result {
+    string addr = 1;
+}
+
+message Nodes {
+    repeated string list = 1;
+}
+
+message UpdateService {
+    string addr = 1;
+    bool IsSuccess = 2;
+}

@@ -1,12 +1,15 @@
 package main
 
 import (
-	"net/http"
-	"github.com/SchSeba/k8s-ExternalLB/pkg/loadbalancer"
 	"log"
-	"os"
 	"io/ioutil"
 	"k8s.io/apimachinery/pkg/util/json"
+	"os"
+	"github.com/SchSeba/k8s-ExternalLB/pkg/loadbalancer"
+	"net"
+	"fmt"
+	"google.golang.org/grpc"
+	pb "github.com/SchSeba/k8s-ExternalLB/pkg/externallb"
 )
 
 var (
@@ -34,6 +37,39 @@ func loadVariables() Variabels{
 	return variables
 }
 
+//func main() {
+//	log.Println("Starting HaproxyCluster controller")
+//	log.Println("Check for enviroment variables")
+//	var variables Variabels
+//
+//	if h := os.Getenv("Prod"); h == "TRUE" {
+//		log.Println("Load enviroment variables")
+//		variables = loadVariables()
+//	} else {
+//		log.Println("Enviroment variables not found use const data (for development only!)")
+//		variables = Variabels{EtcdEndPoints:etcdEndPointsConst,Cidr:cidrConst,Agents:agentsConst}
+//	}
+//
+//	lbController := loadbalancer.LBControllerInitializer(variables.EtcdEndPoints,variables.Agents,variables.Cidr)
+//
+//	// TODO: For Debug
+//	//lbController.ClearDB()
+//
+//	go lbController.SyncAgents()
+//
+//
+//	http.HandleFunc("/Create", lbController.Create)
+//	http.HandleFunc("/Update", lbController.Update)
+//	http.HandleFunc("/Delete", lbController.Delete)
+//	http.HandleFunc("/Nodes", lbController.Nodes)
+//
+//
+//	if err := http.ListenAndServe(":8080", nil); err != nil {
+//		panic(err)
+//	}
+//}
+
+
 func main() {
 	log.Println("Starting HaproxyCluster controller")
 	log.Println("Check for enviroment variables")
@@ -48,20 +84,13 @@ func main() {
 	}
 
 	lbController := loadbalancer.LBControllerInitializer(variables.EtcdEndPoints,variables.Agents,variables.Cidr)
+	lbController.ClearDB()
 
-	// TODO: For Debug
-	//lbController.ClearDB()
-
-	go lbController.SyncAgents()
-
-
-	http.HandleFunc("/Create", lbController.Create)
-	http.HandleFunc("/Update", lbController.Update)
-	http.HandleFunc("/Delete", lbController.Delete)
-	http.HandleFunc("/Nodes", lbController.Nodes)
-
-
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		panic(err)
+	lis, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", 8080))
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
 	}
+	grpcServer := grpc.NewServer()
+	pb.RegisterExternalLBServer(grpcServer,lbController)
+	grpcServer.Serve(lis)
 }
